@@ -45,7 +45,7 @@ public class ZoomPanLayout extends ViewGroup implements
   private float mMinScale = 0;
   private float mMaxScale = 1;
 
-  private float mEffectiveMinScale;
+  private float mEffectiveMinScale = 0f;
   private boolean mShouldScaleToFit = true;
   private boolean mShouldLoopScale = true;
 
@@ -64,6 +64,9 @@ public class ZoomPanLayout extends ViewGroup implements
   private ScaleGestureDetector mScaleGestureDetector;
   private GestureDetector mGestureDetector;
   private TouchUpGestureDetector mTouchUpGestureDetector;
+  private float mStartY = 0f;
+  private float mStartX = 0f;
+  private double mMoveThreshold;
 
   /**
    * Constructor to use when creating a ZoomPanLayout from code.
@@ -80,6 +83,8 @@ public class ZoomPanLayout extends ViewGroup implements
 
   public ZoomPanLayout( Context context, AttributeSet attrs, int defStyleAttr ) {
     super( context, attrs, defStyleAttr );
+    mMoveThreshold = context.getResources().getDisplayMetrics().density * 12;
+
     setWillNotDraw( false );
     mScroller = new Scroller( context );
     mGestureDetector = new GestureDetector( context, this );
@@ -122,6 +127,10 @@ public class ZoomPanLayout extends ViewGroup implements
       }
     }
     calculateMinimumScaleToFit();
+    setScale(mEffectiveMinScale);
+    for( ZoomPanListener listener : mZoomPanListeners ) {
+      listener.onZoomUpdate( mScale, ZoomPanListener.Origination.PINCH );
+    }
     constrainScrollToLimits();
   }
 
@@ -217,6 +226,7 @@ public class ZoomPanLayout extends ViewGroup implements
    */
   public void setScale( float scale ) {
     scale = getConstrainedDestinationScale( scale );
+
     if( mScale != scale ) {
       float previous = mScale;
       mScale = scale;
@@ -500,7 +510,7 @@ public class ZoomPanLayout extends ViewGroup implements
     if( mShouldScaleToFit ) {
       float minimumScaleX = getWidth() / (float) mBaseWidth;
       float minimumScaleY = getHeight() / (float) mBaseHeight;
-      float recalculatedMinScale = Math.max( minimumScaleX, minimumScaleY );
+      float recalculatedMinScale = minimumScaleX;
       if( recalculatedMinScale != mEffectiveMinScale ) {
         mEffectiveMinScale = recalculatedMinScale;
         if( mScale < mEffectiveMinScale ){
@@ -911,4 +921,21 @@ public class ZoomPanLayout extends ViewGroup implements
     void onZoomEnd( float scale, Origination origin );
   }
 
+  @Override
+  public boolean onInterceptTouchEvent(MotionEvent ev) {
+    switch (ev.getActionMasked()) {
+      case MotionEvent.ACTION_DOWN:
+        mStartX = ev.getX();
+        mStartY = ev.getY();
+        break;
+      case MotionEvent.ACTION_MOVE:
+        float curX = ev.getX();
+        float curY = ev.getY();
+        if ((Math.abs(curX - mStartX) > mMoveThreshold) || (Math.abs(curY - mStartY)) > mMoveThreshold) {
+          return true;
+        }
+        break;
+    }
+    return false;
+  }
 }
