@@ -67,47 +67,52 @@ public class ZoomPanLayout extends ViewGroup implements
   private float mStartY = 0f;
   private float mStartX = 0f;
   private double mMoveThreshold;
+  private float mTouchSlop;
+  private List<Integer> idsImmuneToScale;
 
   /**
    * Constructor to use when creating a ZoomPanLayout from code.
    *
    * @param context The Context the ZoomPanLayout is running in, through which it can access the current theme, resources, etc.
    */
-  public ZoomPanLayout( Context context ) {
-    this( context, null );
+  public ZoomPanLayout(Context context) {
+    this(context, null);
   }
 
-  public ZoomPanLayout( Context context, AttributeSet attrs ) {
-    this( context, attrs, 0 );
+  public ZoomPanLayout(Context context, AttributeSet attrs) {
+    this(context, attrs, 0);
   }
 
-  public ZoomPanLayout( Context context, AttributeSet attrs, int defStyleAttr ) {
-    super( context, attrs, defStyleAttr );
+  public ZoomPanLayout(Context context, AttributeSet attrs, int defStyleAttr) {
+    super(context, attrs, defStyleAttr);
+    idsImmuneToScale = new ArrayList<>();
+
+    mTouchSlop = ViewConfiguration.get(getContext()).getScaledPagingTouchSlop();
     mMoveThreshold = context.getResources().getDisplayMetrics().density * 12;
 
-    setWillNotDraw( false );
-    mScroller = new Scroller( context );
-    mGestureDetector = new GestureDetector( context, this );
-    mScaleGestureDetector = new ScaleGestureDetector( context, this );
-    mTouchUpGestureDetector = new TouchUpGestureDetector( this );
+    setWillNotDraw(false);
+    mScroller = new Scroller(context);
+    mGestureDetector = new GestureDetector(context, this);
+    mScaleGestureDetector = new ScaleGestureDetector(context, this);
+    mTouchUpGestureDetector = new TouchUpGestureDetector(this);
   }
 
   @Override
-  protected void onMeasure( int widthMeasureSpec, int heightMeasureSpec ) {
+  protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
     // the container's children should be the size provided by setSize
     // don't use measureChildren because that grabs the child's LayoutParams
-    int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec( mScaledWidth, MeasureSpec.EXACTLY );
-    int childHeightMeasureSpec = MeasureSpec.makeMeasureSpec( mScaledHeight, MeasureSpec.EXACTLY );
-    for( int i = 0; i < getChildCount(); i++){
-      View child = getChildAt( i );
-      child.measure( childWidthMeasureSpec, childHeightMeasureSpec );
+    int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(mScale < 1 ? (int) (mScaledWidth / mScale) : mScaledWidth, MeasureSpec.EXACTLY);
+    int childHeightMeasureSpec = MeasureSpec.makeMeasureSpec(mScale < 1 ? (int) (mScaledHeight / mScale) : mScaledHeight, MeasureSpec.EXACTLY);
+    for (int i = 0; i < getChildCount(); i++) {
+      View child = getChildAt(i);
+      child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
     }
     // but the layout itself should report normal (on screen) dimensions
-    int width = MeasureSpec.getSize( widthMeasureSpec );
-    int height = MeasureSpec.getSize( heightMeasureSpec );
-    width = resolveSize( width, widthMeasureSpec );
-    height = resolveSize( height, heightMeasureSpec );
-    setMeasuredDimension( width, height );
+    int width = MeasureSpec.getSize(widthMeasureSpec);
+    int height = MeasureSpec.getSize(heightMeasureSpec);
+    width = resolveSize(width, widthMeasureSpec);
+    height = resolveSize(height, heightMeasureSpec);
+    setMeasuredDimension(width, height);
   }
 
   /*
@@ -119,17 +124,17 @@ public class ZoomPanLayout extends ViewGroup implements
   in the child's logic (see ScalingLayout).
    */
   @Override
-  protected void onLayout( boolean changed, int l, int t, int r, int b ) {
-    for( int i = 0; i < getChildCount(); i++ ) {
-      View child = getChildAt( i );
-      if( child.getVisibility() != GONE ) {
-        child.layout( 0, 0, mScaledWidth, mScaledHeight);
+  protected void onLayout(boolean changed, int l, int t, int r, int b) {
+    for (int i = 0; i < getChildCount(); i++) {
+      View child = getChildAt(i);
+      if (child.getVisibility() != GONE) {
+        child.layout(0, 0, mScale < 1 ? (int) (mScaledWidth / mScale) : mScaledWidth, mScale < 1 ? (int) (mScaledHeight / mScale) : mScaledHeight);
       }
     }
     calculateMinimumScaleToFit();
     setScale(mEffectiveMinScale);
-    for( ZoomPanListener listener : mZoomPanListeners ) {
-      listener.onZoomUpdate( mScale, ZoomPanListener.Origination.PINCH );
+    for (ZoomPanListener listener : mZoomPanListeners) {
+      listener.onZoomUpdate(mScale, ZoomPanListener.Origination.PINCH);
     }
     constrainScrollToLimits();
   }
@@ -224,17 +229,55 @@ public class ZoomPanLayout extends ViewGroup implements
    *
    * @param scale The new value of the ZoomPanLayout scale.
    */
-  public void setScale( float scale ) {
-    scale = getConstrainedDestinationScale( scale );
+  public void setScale(float scale) {
+    scale = getConstrainedDestinationScale(scale);
 
-    if( mScale != scale ) {
+    if (mScale != scale) {
       float previous = mScale;
       mScale = scale;
       updateScaledDimensions();
       constrainScrollToLimits();
-      onScaleChanged( scale, previous );
+      onScaleChanged(scale, previous);
+      scaleChildren();
       invalidate();
     }
+  }
+
+  private void scaleChildren() {
+    for (int i = getChildCount() - 1; i >= 0; i--) {
+      View child = getChildAt(i);
+      child.setPivotX(0);
+      child.setPivotY(0);
+      child.setScaleX(mScale);
+      child.setScaleY(mScale);
+      if (!idsImmuneToScale.isEmpty()) {
+        unscaleViewsWithImmunity(child);
+      }
+    }
+  }
+
+  private View unscaleViewsWithImmunity(View view) {
+    ViewGroup viewGroup;
+    if (view instanceof ViewGroup) {
+      viewGroup = (ViewGroup) view;
+      for (int i = 0; i < viewGroup.getChildCount(); i++) {
+        View v = unscaleViewsWithImmunity(viewGroup.getChildAt(i));
+        if (v != null) {
+          unscale(v);
+        }
+      }
+    }
+    if (idsImmuneToScale.contains(view.getId())) {
+      return view;
+    }
+    return null;
+  }
+
+  private void unscale(View view) {
+    view.setPivotX(view.getWidth() / 2);
+    view.setPivotY(view.getHeight() / 2);
+    view.setScaleX(1 / mScale);
+    view.setScaleY(1 / mScale);
   }
 
   /**
@@ -932,10 +975,18 @@ public class ZoomPanLayout extends ViewGroup implements
         float curX = ev.getX();
         float curY = ev.getY();
         if ((Math.abs(curX - mStartX) > mMoveThreshold) || (Math.abs(curY - mStartY)) > mMoveThreshold) {
+          ev.setAction(MotionEvent.ACTION_DOWN);
+          mGestureDetector.onTouchEvent(ev);
           return true;
         }
         break;
     }
     return false;
+  }
+
+  public void makeImmuneToScale(@IdRes int id) {
+    if (!idsImmuneToScale.contains(id)) {
+      idsImmuneToScale.add(id);
+    }
   }
 }
