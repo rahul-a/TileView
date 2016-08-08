@@ -3,6 +3,7 @@ package com.qozix.tileview.widgets;
 import android.animation.Animator;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.graphics.Canvas;
 import android.support.annotation.IdRes;
 import android.support.v4.view.ViewCompat;
 import android.util.AttributeSet;
@@ -12,7 +13,9 @@ import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.animation.Interpolator;
+import android.widget.EdgeEffect;
 import android.widget.Scroller;
 
 import com.qozix.tileview.geom.FloatMathHelper;
@@ -20,7 +23,6 @@ import com.qozix.tileview.view.TouchUpGestureDetector;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 
 /**
@@ -39,6 +41,7 @@ public class ZoomPanLayout extends ViewGroup implements
 
   private static final int DEFAULT_ZOOM_PAN_ANIMATION_DURATION = 400;
   public static final int INVALID_POINTER = -1;
+  private static final String TAG = ZoomPanLayout.class.getSimpleName();
 
   private int mBaseWidth;
   private int mBaseHeight;
@@ -61,7 +64,8 @@ public class ZoomPanLayout extends ViewGroup implements
 
   private int mAnimationDuration = DEFAULT_ZOOM_PAN_ANIMATION_DURATION;
 
-  private HashSet<ZoomPanListener> mZoomPanListeners = new HashSet<ZoomPanListener>();
+  private List<ZoomListener> mZoomListeners = new ArrayList<>();
+  private List<PanListener> mPanListeners = new ArrayList<>();
 
   private Scroller mScroller;
   private ZoomPanAnimator mZoomPanAnimator;
@@ -72,10 +76,14 @@ public class ZoomPanLayout extends ViewGroup implements
   private float mStartY = 0f;
   private float mStartX = 0f;
   private double mMoveThreshold;
-  private float mTouchSlop;
   private List<Integer> idsImmuneToScale;
   private boolean resetScaleToFit = true;
   private boolean doubleTap = false;
+
+  private EdgeGlowEffect edgeGlowEffect;
+  private int edgeGlowEffectColor = android.R.color.white;
+  private float mScaleFactor = 1;
+  private InternalZoomListener mInternalZoomListener = new InternalZoomListener();
 
   public interface OnScrollChangeListener {
     void onScrollChanged(int scrollX, int scrollY);
@@ -98,9 +106,12 @@ public class ZoomPanLayout extends ViewGroup implements
 
   public ZoomPanLayout(Context context, AttributeSet attrs, int defStyleAttr) {
     super(context, attrs, defStyleAttr);
+
+    addZoomListener(mInternalZoomListener);
+    edgeGlowEffect = new EdgeGlowEffect(context);
+
     idsImmuneToScale = new ArrayList<>();
 
-    mTouchSlop = ViewConfiguration.get(getContext()).getScaledPagingTouchSlop();
     mMoveThreshold = context.getResources().getDisplayMetrics().density * 12;
 
     setWillNotDraw(false);
@@ -150,11 +161,12 @@ public class ZoomPanLayout extends ViewGroup implements
       setScale(mScale);
     } else {
       calculateMinimumScaleToFit();
+      mMaxScale = mScaleFactor * mMinScale;
       setScale(mEffectiveMinScale);
     }
 
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onZoomUpdate(mScale, ZoomPanListener.Origination.PINCH);
+    for (ZoomListener listener : mZoomListeners) {
+      listener.onZoomUpdate(mScale, Origination.PINCH);
     }
     constrainScrollToLimits();
   }
@@ -191,6 +203,7 @@ public class ZoomPanLayout extends ViewGroup implements
   public void setScaleLimits(float min, float max) {
     mMinScale = min;
     mMaxScale = max;
+    mScale = min;
     setScale(mScale);
   }
 
@@ -274,6 +287,10 @@ public class ZoomPanLayout extends ViewGroup implements
         unscaleViewsWithImmunity(child);
       }
     }
+  }
+
+  public void resetZoomOnFocalPoint(int focusX, int focusY) {
+    smoothScaleFromFocalPoint(focusX, focusY, mEffectiveMinScale);
   }
 
   private View unscaleViewsWithImmunity(View view) {
@@ -363,6 +380,10 @@ public class ZoomPanLayout extends ViewGroup implements
     return mAnimationDuration;
   }
 
+  public boolean isZoomed() {
+    return mScale > mEffectiveMinScale;
+  }
+
   /**
    * Set the duration zoom and pan animation will use.
    *
@@ -375,25 +396,20 @@ public class ZoomPanLayout extends ViewGroup implements
     }
   }
 
-  /**
-   * Adds a ZoomPanListener to the ZoomPanLayout, which will receive notification of actions
-   * relating to zoom and pan events.
-   *
-   * @param zoomPanListener ZoomPanListener implementation to add.
-   * @return True when the listener set did not already contain the Listener, false otherwise.
-   */
-  public boolean addZoomPanListener(ZoomPanListener zoomPanListener) {
-    return mZoomPanListeners.add(zoomPanListener);
+  public boolean addZoomListener(ZoomListener zoomListener) {
+    return mZoomListeners.add(zoomListener);
   }
 
-  /**
-   * Removes a ZoomPanListener from the ZoomPanLayout
-   *
-   * @param listener ZoomPanListener to remove.
-   * @return True if the Listener was removed, false otherwise.
-   */
-  public boolean removeZoomPanListener(ZoomPanListener listener) {
-    return mZoomPanListeners.remove(listener);
+  public boolean addPanListener(PanListener panListener) {
+    return mPanListeners.add(panListener);
+  }
+
+  public boolean removeZoomListener(ZoomListener listener) {
+    return mZoomListeners.remove(listener);
+  }
+
+  public boolean removePanListener(PanListener listener) {
+    return mPanListeners.remove(listener);
   }
 
   /**
@@ -559,7 +575,18 @@ public class ZoomPanLayout extends ViewGroup implements
     boolean gestureIntercept = mGestureDetector.onTouchEvent(event);
     boolean scaleIntercept = mScaleGestureDetector.onTouchEvent(event);
     boolean touchIntercept = mTouchUpGestureDetector.onTouchEvent(event);
+    if (edgeGlowEffect != null) {
+      edgeGlowEffect.processTouchEvent(event);
+    }
     return gestureIntercept || scaleIntercept || touchIntercept || super.onTouchEvent(event);
+  }
+
+  @Override
+  public void draw(Canvas canvas) {
+    super.draw(canvas);
+    if (edgeGlowEffect != null) {
+      edgeGlowEffect.draw(canvas);
+    }
   }
 
   @Override
@@ -636,91 +663,91 @@ public class ZoomPanLayout extends ViewGroup implements
   }
 
   private void broadcastDragBegin() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onPanBegin(getScrollX(), getScrollY(), ZoomPanListener.Origination.DRAG);
+    for (PanListener listener : mPanListeners) {
+      listener.onPanBegin(getScrollX(), getScrollY(), Origination.DRAG);
     }
   }
 
   private void broadcastDragUpdate() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onPanUpdate(getScrollX(), getScrollY(), ZoomPanListener.Origination.DRAG);
+    for (PanListener listener : mPanListeners) {
+      listener.onPanUpdate(getScrollX(), getScrollY(), Origination.DRAG);
     }
   }
 
   private void broadcastDragEnd() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onPanEnd(getScrollX(), getScrollY(), ZoomPanListener.Origination.DRAG);
+    for (PanListener listener : mPanListeners) {
+      listener.onPanEnd(getScrollX(), getScrollY(), Origination.DRAG);
     }
   }
 
   private void broadcastFlingBegin() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onPanBegin(mScroller.getStartX(), mScroller.getStartY(), ZoomPanListener.Origination.FLING);
+    for (PanListener listener : mPanListeners) {
+      listener.onPanBegin(mScroller.getStartX(), mScroller.getStartY(), Origination.FLING);
     }
   }
 
   private void broadcastFlingUpdate() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onPanUpdate(mScroller.getCurrX(), mScroller.getCurrY(), ZoomPanListener.Origination.FLING);
+    for (PanListener listener : mPanListeners) {
+      listener.onPanUpdate(mScroller.getCurrX(), mScroller.getCurrY(), Origination.FLING);
     }
   }
 
   private void broadcastFlingEnd() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onPanEnd(mScroller.getFinalX(), mScroller.getFinalY(), ZoomPanListener.Origination.FLING);
+    for (PanListener listener : mPanListeners) {
+      listener.onPanEnd(mScroller.getFinalX(), mScroller.getFinalY(), Origination.FLING);
     }
   }
 
   private void broadcastProgrammaticPanBegin() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
+    for (PanListener listener : mPanListeners) {
       listener.onPanBegin(getScrollX(), getScrollY(), null);
     }
   }
 
   private void broadcastProgrammaticPanUpdate() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
+    for (PanListener listener : mPanListeners) {
       listener.onPanUpdate(getScrollX(), getScrollY(), null);
     }
   }
 
   private void broadcastProgrammaticPanEnd() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
+    for (PanListener listener : mPanListeners) {
       listener.onPanEnd(getScrollX(), getScrollY(), null);
     }
   }
 
   private void broadcastPinchBegin() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onZoomBegin(mScale, ZoomPanListener.Origination.PINCH);
+    for (ZoomListener listener : mZoomListeners) {
+      listener.onZoomBegin(mScale, Origination.PINCH);
     }
   }
 
   private void broadcastPinchUpdate() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onZoomUpdate(mScale, ZoomPanListener.Origination.PINCH);
+    for (ZoomListener listener : mZoomListeners) {
+      listener.onZoomUpdate(mScale, Origination.PINCH);
     }
   }
 
   private void broadcastPinchEnd() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
-      listener.onZoomEnd(mScale, ZoomPanListener.Origination.PINCH);
+    for (ZoomListener listener : mZoomListeners) {
+      listener.onZoomEnd(mScale, Origination.PINCH);
     }
   }
 
   private void broadcastProgrammaticZoomBegin() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
+    for (ZoomListener listener : mZoomListeners) {
       listener.onZoomBegin(mScale, null);
     }
   }
 
   private void broadcastProgrammaticZoomUpdate() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
+    for (ZoomListener listener : mZoomListeners) {
       listener.onZoomUpdate(mScale, null);
     }
   }
 
   private void broadcastProgrammaticZoomEnd() {
-    for (ZoomPanListener listener : mZoomPanListeners) {
+    for (ZoomListener listener : mZoomListeners) {
       listener.onZoomEnd(mScale, null);
     }
   }
@@ -737,7 +764,12 @@ public class ZoomPanLayout extends ViewGroup implements
 
   @Override
   public boolean onFling(MotionEvent event1, MotionEvent event2, float velocityX, float velocityY) {
-    return false;
+    mScroller.fling( getScrollX(), getScrollY(), (int) -velocityX, (int) -velocityY, 0,
+            getScrollLimitX(), 0, getScrollLimitY() );
+    mIsFlinging = true;
+    ViewCompat.postInvalidateOnAnimation(this);
+    broadcastFlingBegin();
+    return true;
   }
 
   @Override
@@ -776,9 +808,8 @@ public class ZoomPanLayout extends ViewGroup implements
 
   @Override
   public boolean onDoubleTap(MotionEvent event) {
-    float destination = (float) (Math.pow(2, Math.floor(Math.log(mScale * 2) / Math.log(2))));
-    float effectiveDestination = mShouldLoopScale && mScale >= mMaxScale ? mMinScale : destination;
-    destination = getConstrainedDestinationScale(effectiveDestination);
+    float effectiveDestination = mShouldLoopScale && mScale >= mMaxScale ? mMinScale : mMaxScale;
+    float destination = getConstrainedDestinationScale(effectiveDestination);
     smoothScaleFromFocalPoint((int) event.getX(), (int) event.getY(), destination);
     return true;
   }
@@ -972,24 +1003,26 @@ public class ZoomPanLayout extends ViewGroup implements
     }
   }
 
-  public interface ZoomPanListener {
-    enum Origination {
-      DRAG,
-      FLING,
-      PINCH
-    }
+  public enum Origination {
+    DRAG,
+    FLING,
+    PINCH
+  }
 
-    void onPanBegin(int x, int y, Origination origin);
-
-    void onPanUpdate(int x, int y, Origination origin);
-
-    void onPanEnd(int x, int y, Origination origin);
-
+  public interface ZoomListener {
     void onZoomBegin(float scale, Origination origin);
 
     void onZoomUpdate(float scale, Origination origin);
 
     void onZoomEnd(float scale, Origination origin);
+  }
+
+  public interface PanListener {
+    void onPanBegin(int x, int y, Origination origin);
+
+    void onPanUpdate(int x, int y, Origination origin);
+
+    void onPanEnd(int x, int y, Origination origin);
   }
 
   @Override
@@ -1012,6 +1045,10 @@ public class ZoomPanLayout extends ViewGroup implements
     return false;
   }
 
+  public void setMaxScaleFactor(float scaleFactor) {
+    mScaleFactor = scaleFactor;
+  }
+
   public void makeImmuneToScale(@IdRes int id) {
     if (!idsImmuneToScale.contains(id)) {
       idsImmuneToScale.add(id);
@@ -1020,5 +1057,259 @@ public class ZoomPanLayout extends ViewGroup implements
 
   public void setOnScrollChangeListener(OnScrollChangeListener listener) {
     onScrollChangeListener = listener;
+  }
+
+  public void setEdgeGlowEffectColor(int color) {
+    edgeGlowEffect.setColor(color);
+  }
+
+  public void executeOnZoomEnd(Runnable runnable) {
+      mInternalZoomListener.zoomEndRunnables.add(runnable);
+  }
+
+  public void executeOnZoomBegin(Runnable runnable) {
+      mInternalZoomListener.zoomBeginRunnables.add(runnable);
+  }
+
+  public void executeOnZoomUpdate(Runnable runnable) {
+      mInternalZoomListener.zoomUpdateRunnables.add(runnable);
+  }
+
+  private class EdgeGlowEffect {
+
+    private float mTouchSlop;
+    private EdgeEffect mEdgeGlowEffectRight, mEdgeGlowEffectLeft;
+    private EdgeEffect mEdgeGlowEffectTop, mEdgeGlowEffectBottom;
+    private int mLastMotionX;
+    private int mLastMotionY;
+    private int mActivePointerId = INVALID_POINTER;
+    private boolean mIsBeingDragged;
+
+    EdgeGlowEffect(Context context) {
+      mEdgeGlowEffectTop = new EdgeEffect(context);
+      mEdgeGlowEffectBottom = new EdgeEffect(context);
+      mEdgeGlowEffectLeft = new EdgeEffect(context);
+      mEdgeGlowEffectRight = new EdgeEffect(context);
+      setColor(getResources().getColor(android.R.color.white));
+      mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+    }
+
+    private void setColor(int color) {
+      mEdgeGlowEffectTop.setColor(color);
+      mEdgeGlowEffectBottom.setColor(color);
+      mEdgeGlowEffectLeft.setColor(color);
+      mEdgeGlowEffectRight.setColor(color);
+    }
+
+    void processTouchEvent(MotionEvent event) {
+      switch (event.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN:
+          // Remember where the motion event started
+          mLastMotionX = (int) event.getX();
+          mLastMotionY = (int) event.getY();
+          mActivePointerId = event.getPointerId(0);
+          break;
+
+        case MotionEvent.ACTION_MOVE:
+          final int activePointerIndex = event.findPointerIndex(mActivePointerId);
+          if (activePointerIndex == -1) {
+            mActivePointerId = event.getPointerId(0);
+            break;
+          }
+
+          final int x = (int) event.getX(activePointerIndex);
+          final int y = (int) event.getY(activePointerIndex);
+
+          int deltaX = mLastMotionX - x;
+          int deltaY = mLastMotionY - y;
+          if (!mIsBeingDragged && Math.abs(deltaX) > mTouchSlop) {
+            final ViewParent parent = getParent();
+            if (parent != null) {
+              parent.requestDisallowInterceptTouchEvent(true);
+            }
+            mIsBeingDragged = true;
+            if (deltaX > 0) {
+              deltaX -= mTouchSlop;
+            } else {
+              deltaX += mTouchSlop;
+            }
+          }
+
+          if (mIsBeingDragged) {
+            // Scroll to follow the motion event
+            mLastMotionX = x;
+
+            final int oldX = getScrollX();
+            final int oldY = getScrollY();
+            final int range = getScrollRange();
+            final int overscrollMode = getOverScrollMode();
+            final boolean canOverscroll = overscrollMode == OVER_SCROLL_ALWAYS ||
+                    (overscrollMode == OVER_SCROLL_IF_CONTENT_SCROLLS && range > 0);
+
+            if (canOverscroll) {
+              final int pulledToX = oldX + deltaX;
+              final int pulledToY = oldY + deltaY;
+
+              if (pulledToX < 0) {
+                mEdgeGlowEffectLeft.onPull((float) deltaX / getWidth(),
+                        1.f - event.getY(activePointerIndex) / getHeight());
+                if (!mEdgeGlowEffectRight.isFinished()) {
+                  mEdgeGlowEffectRight.onRelease();
+                }
+              } else if (pulledToX > getScrollLimitX()) {
+                mEdgeGlowEffectRight.onPull((float) deltaX / getWidth(),
+                        event.getY(activePointerIndex) / getHeight());
+                if (!mEdgeGlowEffectLeft.isFinished()) {
+                  mEdgeGlowEffectLeft.onRelease();
+                }
+              }
+
+              if (pulledToY < 0) {
+                mEdgeGlowEffectTop.onPull((float) deltaY / getHeight(),
+                        event.getX(activePointerIndex) / getWidth());
+                if (!mEdgeGlowEffectBottom.isFinished()) {
+                  mEdgeGlowEffectBottom.onRelease();
+                }
+              } else if (pulledToY > getScrollLimitY()) {
+                mEdgeGlowEffectBottom.onPull((float) deltaY / getHeight(),
+                        1.f - event.getX(activePointerIndex) / getWidth());
+                if (!mEdgeGlowEffectTop.isFinished()) {
+                  mEdgeGlowEffectTop.onRelease();
+                }
+              }
+
+              if (mEdgeGlowEffectLeft != null
+                      && (!mEdgeGlowEffectLeft.isFinished() || !mEdgeGlowEffectRight.isFinished())) {
+                postInvalidateOnAnimation();
+              }
+
+              if (mEdgeGlowEffectTop != null
+                      && (!mEdgeGlowEffectTop.isFinished() || !mEdgeGlowEffectBottom.isFinished())) {
+                postInvalidateOnAnimation();
+              }
+            }
+          }
+          break;
+
+        case MotionEvent.ACTION_CANCEL:
+        case MotionEvent.ACTION_UP:
+          if (mEdgeGlowEffectLeft != null) {
+            mEdgeGlowEffectLeft.onRelease();
+            mEdgeGlowEffectRight.onRelease();
+          }
+          break;
+      }
+    }
+
+    void draw(Canvas canvas) {
+      if (mEdgeGlowEffectLeft != null) {
+        if (mScale > mEffectiveMinScale) {
+          drawHorizontalEdgeGlowEffect(canvas);
+        }
+        drawVerticalEdgeGlowEffect(canvas);
+      }
+    }
+
+    private void drawVerticalEdgeGlowEffect(Canvas canvas) {
+      final int scrollX = getScrollX();
+      final int scrollY = getScrollY();
+
+      if (!mEdgeGlowEffectTop.isFinished()) {
+        final int restoreCount = canvas.save();
+        final int width = getWidth() - getPaddingLeft() - getPaddingRight();
+
+        canvas.translate(getPaddingLeft() + scrollX, Math.min(0, scrollY));
+        mEdgeGlowEffectTop.setSize(width, getHeight());
+        if (mEdgeGlowEffectTop.draw(canvas)) {
+          postInvalidateOnAnimation();
+        }
+        canvas.restoreToCount(restoreCount);
+      }
+      if (!mEdgeGlowEffectBottom.isFinished()) {
+        final int restoreCount = canvas.save();
+        final int width = getWidth() - getPaddingLeft() - getPaddingRight();
+        final int height = getHeight();
+
+        canvas.translate(-width + getPaddingLeft() + scrollX,
+                scrollY + height);
+        canvas.rotate(180, width, 0);
+        mEdgeGlowEffectBottom.setSize(width, height);
+        if (mEdgeGlowEffectBottom.draw(canvas)) {
+          postInvalidateOnAnimation();
+        }
+        canvas.restoreToCount(restoreCount);
+      }
+    }
+
+    private void drawHorizontalEdgeGlowEffect(Canvas canvas) {
+      final int scrollX = getScrollX();
+      if (!mEdgeGlowEffectLeft.isFinished()) {
+        final int restoreCount = canvas.save();
+        final int height = getHeight() - getPaddingTop() - getPaddingBottom();
+
+        canvas.rotate(270);
+        canvas.translate(-(getScrollY() + height) + getPaddingTop(), Math.min(0, scrollX));
+        mEdgeGlowEffectLeft.setSize(height, getWidth());
+        if (mEdgeGlowEffectLeft.draw(canvas)) {
+          postInvalidateOnAnimation();
+        }
+        canvas.restoreToCount(restoreCount);
+      }
+      if (!mEdgeGlowEffectRight.isFinished()) {
+        final int restoreCount = canvas.save();
+        final int width = getWidth();
+        final int height = getHeight() - getPaddingTop() - getPaddingBottom();
+
+        canvas.rotate(90);
+        canvas.translate(-(getPaddingTop() - getScrollY()),
+                -(scrollX + width));
+        mEdgeGlowEffectRight.setSize(height, width);
+        if (mEdgeGlowEffectRight.draw(canvas)) {
+          postInvalidateOnAnimation();
+        }
+        canvas.restoreToCount(restoreCount);
+      }
+    }
+
+    private int getScrollRange() {
+      int scrollRange = 0;
+      if (getChildCount() > 0) {
+        View child = getChildAt(0);
+        scrollRange = Math.max(0,
+                (mScaledWidth - getPaddingLeft() - getPaddingRight()));
+      }
+      return scrollRange;
+    }
+  }
+
+  private class InternalZoomListener implements ZoomListener {
+
+    private List<Runnable> zoomBeginRunnables = new ArrayList<>();
+    private List<Runnable> zoomUpdateRunnables = new ArrayList<>();
+    private List<Runnable> zoomEndRunnables = new ArrayList<>();
+
+    @Override
+    public void onZoomBegin(float scale, Origination origin) {
+      for (Runnable runnable : zoomBeginRunnables) {
+        post(runnable);
+      }
+      zoomBeginRunnables.clear();
+    }
+
+    @Override
+    public void onZoomUpdate(float scale, Origination origin) {
+      for (Runnable runnable : zoomUpdateRunnables) {
+        post(runnable);
+      }
+      zoomUpdateRunnables.clear();
+    }
+
+    @Override
+    public void onZoomEnd(float scale, Origination origin) {
+      for (Runnable runnable : zoomEndRunnables) {
+        post(runnable);
+      }
+      zoomEndRunnables.clear();
+    }
   }
 }

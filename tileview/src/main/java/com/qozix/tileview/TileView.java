@@ -66,7 +66,8 @@ import java.util.List;
  * }</pre>
  */
 public class TileView extends ZoomPanLayout implements
-  ZoomPanLayout.ZoomPanListener,
+  ZoomPanLayout.ZoomListener,
+  ZoomPanLayout.PanListener,
   TileCanvasViewGroup.TileRenderListener,
   DetailLevelManager.DetailLevelChangeListener {
 
@@ -121,7 +122,8 @@ public class TileView extends ZoomPanLayout implements
 
     mDetailLevelManager.setDetailLevelChangeListener( this );
     mTileCanvasViewGroup.setTileRenderListener( this );
-    addZoomPanListener( this );
+    addZoomListener( this );
+    addPanListener( this );
 
     mRenderThrottleHandler = new RenderThrottleHandler( this );
 
