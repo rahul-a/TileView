@@ -6,6 +6,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.support.annotation.IdRes;
 import android.support.v4.view.ViewCompat;
+import android.support.v4.widget.EdgeEffectCompat;
 import android.util.AttributeSet;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -15,7 +16,6 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.animation.Interpolator;
-import android.widget.EdgeEffect;
 import android.widget.Scroller;
 
 import com.qozix.tileview.geom.FloatMathHelper;
@@ -119,6 +119,21 @@ public class ZoomPanLayout extends ViewGroup implements
     mGestureDetector = new GestureDetector(context, this);
     mScaleGestureDetector = new ScaleGestureDetector(context, this);
     mTouchUpGestureDetector = new TouchUpGestureDetector(this);
+  }
+
+  public void reset() {
+    mBaseWidth = 0;
+    mBaseHeight = 0;
+    mScaledWidth = 0;
+    mScaledHeight = 0;
+
+    mScale = 1;
+    mMinScale = 1;
+    mMaxScale = 1;
+
+    mEffectiveMinScale = 0f;
+    mScaleFactor = 1;
+    invalidate();
   }
 
   @Override
@@ -1059,10 +1074,6 @@ public class ZoomPanLayout extends ViewGroup implements
     onScrollChangeListener = listener;
   }
 
-  public void setEdgeGlowEffectColor(int color) {
-    edgeGlowEffect.setColor(color);
-  }
-
   public void executeOnZoomEnd(Runnable runnable) {
       mInternalZoomListener.zoomEndRunnables.add(runnable);
   }
@@ -1078,27 +1089,19 @@ public class ZoomPanLayout extends ViewGroup implements
   private class EdgeGlowEffect {
 
     private float mTouchSlop;
-    private EdgeEffect mEdgeGlowEffectRight, mEdgeGlowEffectLeft;
-    private EdgeEffect mEdgeGlowEffectTop, mEdgeGlowEffectBottom;
+    private EdgeEffectCompat mEdgeGlowEffectRight, mEdgeGlowEffectLeft;
+    private EdgeEffectCompat mEdgeGlowEffectTop, mEdgeGlowEffectBottom;
     private int mLastMotionX;
     private int mLastMotionY;
     private int mActivePointerId = INVALID_POINTER;
     private boolean mIsBeingDragged;
 
     EdgeGlowEffect(Context context) {
-      mEdgeGlowEffectTop = new EdgeEffect(context);
-      mEdgeGlowEffectBottom = new EdgeEffect(context);
-      mEdgeGlowEffectLeft = new EdgeEffect(context);
-      mEdgeGlowEffectRight = new EdgeEffect(context);
-      setColor(getResources().getColor(android.R.color.white));
+      mEdgeGlowEffectTop = new EdgeEffectCompat(context);
+      mEdgeGlowEffectBottom = new EdgeEffectCompat(context);
+      mEdgeGlowEffectLeft = new EdgeEffectCompat(context);
+      mEdgeGlowEffectRight = new EdgeEffectCompat(context);
       mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
-    }
-
-    private void setColor(int color) {
-      mEdgeGlowEffectTop.setColor(color);
-      mEdgeGlowEffectBottom.setColor(color);
-      mEdgeGlowEffectLeft.setColor(color);
-      mEdgeGlowEffectRight.setColor(color);
     }
 
     void processTouchEvent(MotionEvent event) {
@@ -1151,28 +1154,24 @@ public class ZoomPanLayout extends ViewGroup implements
               final int pulledToY = oldY + deltaY;
 
               if (pulledToX < 0) {
-                mEdgeGlowEffectLeft.onPull((float) deltaX / getWidth(),
-                        1.f - event.getY(activePointerIndex) / getHeight());
+                mEdgeGlowEffectLeft.onPull((float) deltaX / getWidth());
                 if (!mEdgeGlowEffectRight.isFinished()) {
                   mEdgeGlowEffectRight.onRelease();
                 }
               } else if (pulledToX > getScrollLimitX()) {
-                mEdgeGlowEffectRight.onPull((float) deltaX / getWidth(),
-                        event.getY(activePointerIndex) / getHeight());
+                mEdgeGlowEffectRight.onPull((float) deltaX / getWidth());
                 if (!mEdgeGlowEffectLeft.isFinished()) {
                   mEdgeGlowEffectLeft.onRelease();
                 }
               }
 
               if (pulledToY < 0) {
-                mEdgeGlowEffectTop.onPull((float) deltaY / getHeight(),
-                        event.getX(activePointerIndex) / getWidth());
+                mEdgeGlowEffectTop.onPull((float) deltaY / getHeight());
                 if (!mEdgeGlowEffectBottom.isFinished()) {
                   mEdgeGlowEffectBottom.onRelease();
                 }
               } else if (pulledToY > getScrollLimitY()) {
-                mEdgeGlowEffectBottom.onPull((float) deltaY / getHeight(),
-                        1.f - event.getX(activePointerIndex) / getWidth());
+                mEdgeGlowEffectBottom.onPull((float) deltaY / getHeight());
                 if (!mEdgeGlowEffectTop.isFinished()) {
                   mEdgeGlowEffectTop.onRelease();
                 }
