@@ -77,13 +77,12 @@ public class ZoomPanLayout extends ViewGroup implements
   private float mStartX = 0f;
   private double mMoveThreshold;
   private List<Integer> idsImmuneToScale;
-  private boolean resetScaleToFit = true;
   private boolean doubleTap = false;
 
   private EdgeGlowEffect edgeGlowEffect;
-  private int edgeGlowEffectColor = android.R.color.white;
   private float mScaleFactor = 1;
   private InternalZoomListener mInternalZoomListener = new InternalZoomListener();
+  private boolean intercept = true;
 
   public interface OnScrollChangeListener {
     void onScrollChanged(int scrollX, int scrollY);
@@ -623,7 +622,6 @@ public class ZoomPanLayout extends ViewGroup implements
         mEffectiveMinScale = mMinScale = recalculatedMinScale;
         if (mScale < mEffectiveMinScale) {
           setScale(mEffectiveMinScale);
-          resetScaleToFit = false;
         }
       }
     }
@@ -785,6 +783,7 @@ public class ZoomPanLayout extends ViewGroup implements
     ViewCompat.postInvalidateOnAnimation(this);
     broadcastFlingBegin();
     return true;
+
   }
 
   @Override
@@ -813,12 +812,26 @@ public class ZoomPanLayout extends ViewGroup implements
 
   @Override
   public boolean onSingleTapUp(MotionEvent event) {
-    return true;
+    return false;
   }
 
   @Override
   public boolean onSingleTapConfirmed(MotionEvent event) {
+    dispatchSingleClickToChildren(event);
     return true;
+  }
+
+  private void dispatchSingleClickToChildren(MotionEvent event) {
+    intercept = false;
+    MotionEvent downEvent = MotionEvent.obtain(event);
+    downEvent.setAction(MotionEvent.ACTION_DOWN);
+
+    MotionEvent upEvent = MotionEvent.obtain(event);
+    upEvent.setAction(MotionEvent.ACTION_UP);
+
+    dispatchTouchEvent(downEvent);
+    dispatchTouchEvent(upEvent);
+    intercept = true;
   }
 
   @Override
@@ -1057,7 +1070,7 @@ public class ZoomPanLayout extends ViewGroup implements
         }
         break;
     }
-    return false;
+    return intercept;
   }
 
   public void setMaxScaleFactor(float scaleFactor) {
